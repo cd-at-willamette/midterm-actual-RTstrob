@@ -48,10 +48,23 @@ names(Auto)
 - Compute and comment on the RMSE.
 
 ```{r regression}
-# Your code here
+set.seed(28213)
+auto_index <- createDataPartition(Auto$year, p = 0.8, list = FALSE)
+train <- Auto[auto_index,]
+test <- Auto[-auto_index,]
+
+
+linear = lm(mpg ~ horsepower + year, data = train)
+summary(linear)
+
+predictions = predict(linear, newdata = test)
+residuals = test$mpg - predictions
+
+rmse = sqrt(mean(residuals^2))
+cat("RMSE:", rmse, "\nMin. MPG:", min(Auto$mpg), "\n Max MPG:", max(Auto$mpg), "\n Median MPG:", median(Auto$mpg), "\nSD MPD:", sd(Auto$mpg))
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+> <span style="color:red;font-weight:bold">EXPLAIN</span>: So in this simple linear model, the RMSE is only about 4, which means if it tries to predict a car's mpg, based only on its horsepower and manufacture year, it'll only be off by an average of 4 miles per gallon. In the scheme of the spread of this dataset, that honestly seems really great. The standard deviation of mpg is nearly 8, so the RMSE being about half that makes this simple model appear to be a surprisingly good predictor for mpg.
 
 # Feature Engineering
 
@@ -61,10 +74,48 @@ names(Auto)
 - Compute and comment on the RMSE.
 
 ```{r features}
-# Your code here
+#somehow it was a factor?
+Auto$name = as.character(Auto$name)
+
+#making new columns
+feat_auto = Auto %>%
+  mutate(
+    american = str_detect(name,"chevrolet|buick|plymouth|amc|ford|pontiac|dodge|chrysler|mercury|oldsmobile|cadillac|chevy|chevroelt"),
+    japanese = str_detect(name, "toyota|datsun|honda|mazda|subaru|nissan|toyouta|maxda|hi"),
+    german = str_detect(name, "volkswagen|bmw|audi|mercedes-benz|mercedes|vokswagen|opel|capri|vw"),
+    french = str_detect(name, "peugeot|renault"),
+    italian = str_detect(name, "fiat"),
+    swedish = str_detect(name, "volvo|saab"),
+    british = str_detect(name, "triumph"),
+    diesel = str_detect(name, "diesel"),
+    stationwagon = str_detect(name, "(sw)"),
+    luxury = str_detect(name, "bmw|mercedes-benz|mercedes|audi|cadillac")
+  )
+
+#final narrowing it down before computing rmse
+feat_auto_mod = feat_auto %>%
+  select(name, mpg, american, japanese, german, french, italian, swedish, british, diesel, stationwagon, luxury) %>%
+  drop_na()
+
+#let's do it!
+set.seed(887)
+auto_index <- createDataPartition(feat_auto_mod$mpg, p = 0.8, list = FALSE)
+train <- feat_auto_mod[auto_index,]
+test <- feat_auto_mod[-auto_index,]
+
+feature = lm(mpg ~ american + japanese + german + french + italian + swedish + british + diesel + stationwagon + luxury, data = train)
+summary(feature)
+
+predictions = predict(feature, newdata = test)
+residuals = test$mpg - predictions
+
+rmse = sqrt(mean(residuals^2))
+cat("RMSE:", rmse)
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+> <span style="color:red;font-weight:bold">EXPLAIN</span>: Using these new features, which were mostly just sorted by country of origin, the RMSE got slightly worse, though I think it still borders on "acceptable" in terms of explaining the mpg for a car. Whether or not the car was a stationwagon or used diesel seemed to be the best predictors, which makes obvious intuitive sense!
+Swedish and American cars seemed oddly terrible in terms of mpg overall, while Japanese, British, and German trended towards being great.
+Many countries just lacked much data, so maybe I'd combine some European countries (besides Germany) in the future. 
 
 # Classification
 
@@ -73,10 +124,44 @@ names(Auto)
 - Report on your Kappa value.
 
 ```{r classification}
-# Your code here
+#i'm not sure if this is good (don't wanna classify everything as a honda) or bad (overfitting)
+auto_knn = Auto %>%
+  mutate(make = word(name, 1)) %>%
+  filter(make %in% c("chevrolet","chevy","chevroelt","honda")) %>%
+  drop_na() %>%
+  mutate(make = case_when(
+    make %in% c("chevy","chevroelt") ~ "chevrolet",
+    TRUE ~ make
+  ))
+
+#i just realized the 'origin' column exists. that invalidates all my previous features. and will make this model so overfit. i think i'm gonna drop it if my kappa is too high. maybe boxcox will destroy it?
+
+auto_knn = auto_knn %>%
+  select(-name, -origin)
+
+#boxcox
+auto_box <- auto_knn %>% 
+  preProcess(method = c("BoxCox","center","scale")) %>% 
+  predict(auto_knn)
+
+#knn
+set.seed(9841)
+auto_index <- createDataPartition(auto_box$make, p = 0.7, list = FALSE)
+train <- auto_box[auto_index,]
+test <- auto_box[-auto_index,]
+
+model <- train(make ~ .,
+             data = train, 
+             method = "knn",
+             tuneLength = 15,
+             trControl = trainControl(method = "cv", number = 5))
+print(model)
+
+confusionMatrix(predict(model,test), factor(test$make))
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+> <span style="color:red;font-weight:bold">EXPLAIN</span>: Ok this was a bit of a mess. I filtered to only include Chevys and Hondas after a lot of deliberation. The origin column would especially be a huge problem when it came to overfitting, so I dropped it. When I initially partitioned the train/test at 0.8, I always got a kappa of 1, so putting it down to 0.7 gave me a more realistic/awesome kappa of ~0.8. This may be due to the relative scarcity of Hondas in the dataset compared to Chevys?
+I was initially very hesitant to filter it to only Chevys or Hondas, but I think that's the only way this kind of model would work, after testing a little extra.
 
 # Binary Classification
 
@@ -85,10 +170,45 @@ names(Auto)
 - Display and comment on an ROC curve.
 
 ```{r binary classification}
-# Your code here
+auto_binary = Auto %>%
+  mutate(honda = str_detect(name, "honda") %>% as.factor()) %>%
+  drop_na() %>%
+  select(-name)
+#i think it's ok to leave origin in since there are other japanese manufacturers
+
+set.seed(117)
+auto_index <- createDataPartition(auto_binary$honda, p = 0.8, list = FALSE)
+train <- auto_binary[auto_index,]
+test <- auto_binary[-auto_index,]
+
+#all hondas are from japan and have 4 cylinders!
+weight_train = train %>% 
+  mutate(weights=case_when(origin==3 & cylinders == 4 ~ 10,
+                           TRUE ~ 1))
+
+#random forest...
+control = trainControl(method = "cv", number = 5)
+
+fit <- train(honda ~ .,
+             data = train, 
+             trControl = control,
+             method = "rf",
+             maxit = 10,
+             weights = weight_train$weights) 
+print(fit)
+
+#roc
+library(pROC)
+
+prob <- predict(fit, newdata = test, type = "prob")[,2]
+myRoc <- roc(test$honda, prob)
+plot(myRoc)
+
+auc(myRoc)
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: *Explain*
+> <span style="color:red;font-weight:bold">EXPLAIN</span>: Using a random forest, I got a kappa of 0.45. I gave extra weight to cars with 4 cylinders and an origin of 3 (Japan), which all hondas share. I'm decently satisfied...
+The AUC was a whopping 0.9933. This makes me wonder about overfitting, but the kappa makes me question that.
 
 # Ethics
 
@@ -99,19 +219,34 @@ names(Auto)
     - Climate Change
 - Provide at least one statistical measure for each, such as a RMSE, Kappa value, or ROC curve.
 
-> <span style="color:red;font-weight:bold">TODO</span>: Big Data and Human-Centered Computing
+> <span style="color:red;font-weight:bold">Big Data and Human-Centered Computing</span>: Big data and human-centered computing make me think about a data scientist's responsibility to ensure data privacy for everyone they study. This is really difficult, especially if you need to stratify by certain demographic information. People lie, or request privacy, and all this stuff that makes them hard to study. But that's kinda their right and it shouldn't be taken away from them.
+We can see the RMSE for a linear model that only looks at mpg and year is only 3.8. Recalling the spread we found earlier, it seems like a good predictor. This makes me hopeful that mpg is universally trending upwards.
 
 ```{r big data}
-# Your code here
+set.seed(117)
+eth_index <- createDataPartition(Auto$year, p = 0.8, list = FALSE)
+train <- Auto[eth_index,]
+test <- Auto[-eth_index,]
+
+mpg_linear <- lm(mpg ~ year, data = train)
+summary(mpg_linear)
+
+predictions = predict(linear, newdata = test)
+residuals = test$mpg - predictions
+
+rmse = sqrt(mean(residuals^2))
+print(rmse)
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: Democratic Institutions
+> <span style="color:red;font-weight:bold">Democratic Institutions</span>: This one is a loaded question. I've been reading a lot about voting via the blockchain, and while it seems like a very cool idea in theory, it also sounds totally impossible to simultaneously ensure a fair election AND user anonymity at the same time. If everyone gets a government-issued "vote wallet" then they can be tracked down with trivial ease. If a voter registers by making their own, what's stopping them from making a bunch and voting multiple times? What's stopping Russian hackers from making their own? It sounds like a little more trouble than it might be worth.
+I also think about how governments are incentivized to ignore climate change by large oil and gas companies. Exxon scientist knew about climate change for decades, and kept it secret from the public. But the government knew. The US government set up these lofty climate goals that the current administration has absolutely no financial incentive to try to abide to. People can't even boycott oil and gas companies because electric cars are all luxury vehicles here in the US, for some reason. Even if we were allowed to buy the reasonably-priced Chinese ones (that are illegal to save US auto manufacturers), most Americans would be getting the electricity from burned coal anyway!
+I guess as a data scientist, trying to operate with integrity and transparency is key, as well as working to help the average citizen, NOT the large corporations or the government they lobby.
 
 ```{r democracy}
 # Your code here
 ```
 
-> <span style="color:red;font-weight:bold">TODO</span>: Climate Change
+> <span style="color:red;font-weight:bold">Climate Change</span>:I covered a lot of what I wanted to talk about in the last paragraph, but I just want to say that I think more corporate data scientists should be leaking stuff to the press. How awesome would that be? They can't Snowden everyone. Imagine how different it would be if oil and gas companies weren't able to hide the facts about climate change all those years ago.
 
 ```{r climate}
 # Your code here
